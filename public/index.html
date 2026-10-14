@@ -1,0 +1,366 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<title>Woodstauhn AI Render</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.5/babel.min.js"></script>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,500;9..144,600&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --bg: #16140f; --bg-panel: #1e1b15; --bg-panel-2: #262119;
+    --line: #35301f; --line-soft: #2a2519;
+    --text: #f1ece0; --text-dim: #a89f8b; --text-faint: #6f6857;
+    --amber: #d98c3a; --amber-soft: rgba(217,140,58,0.14);
+    --danger: #d9643a;
+  }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; }
+  body {
+    margin: 0; background: var(--bg); color: var(--text);
+    font-family: 'Inter', system-ui, sans-serif;
+    padding-top: env(safe-area-inset-top, 0px);
+    padding-bottom: env(safe-area-inset-bottom, 0px);
+    -webkit-font-smoothing: antialiased;
+  }
+  #root { min-height: 100%; }
+  .serif { font-family: 'Fraunces', serif; }
+  button { font-family: inherit; cursor: pointer; }
+  @keyframes fadeIn { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: translateY(0); } }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  @keyframes shimmer { 0% { background-position: -400px 0; } 100% { background-position: 400px 0; } }
+  .grain-progress {
+    background: linear-gradient(90deg, var(--amber) 0%, #f0b978 50%, var(--amber) 100%);
+    background-size: 400px 100%; animation: shimmer 1.4s linear infinite;
+  }
+</style>
+</head>
+<body>
+<div id="root"></div>
+<script type="text/babel" data-presets="react">
+const { useState, useRef, useEffect, useCallback } = React;
+
+/* ============================================================
+   CONFIG — à renseigner une fois le backend déployé (voir README
+   du dossier woodstauhn-backend). Tant que c'est vide, l'app
+   affiche un message clair au lieu de simuler un faux rendu.
+   ============================================================ */
+const BACKEND_URL = ""; // même origine : le backend sert aussi cette page
+
+/* ---------- Icônes inline (pas de dépendance externe) ---------- */
+const Icon = ({ d, size = 18, ...p }) => (
+  <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor"
+       strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" {...p}><path d={d} /></svg>
+);
+const IconUpload = (p) => <Icon d="M12 16V4M12 4l-4 4M12 4l4 4M4 16v3a1 1 0 001 1h14a1 1 0 001-1v-3" {...p} />;
+const IconLayers = (p) => <Icon d="M12 3l9 5-9 5-9-5 9-5zM3 13l9 5 9-5M3 17l9 5 9-5" {...p} />;
+const IconSofa = (p) => <Icon d="M4 11V8a2 2 0 012-2h12a2 2 0 012 2v3M3 11h18v5a1 1 0 01-1 1H4a1 1 0 01-1-1v-5zM5 17v3M19 17v3" {...p} />;
+const IconArrows = (p) => <Icon d="M8 9l-4 4 4 4M16 9l4 4-4 4M4 13h16" {...p} />;
+const IconSpark = (p) => <Icon d="M12 3l1.8 5.4L19 10l-5.2 1.6L12 17l-1.8-5.4L5 10l5.2-1.6L12 3z" {...p} />;
+const IconClose = (p) => <Icon d="M6 6l12 12M18 6L6 18" {...p} />;
+const IconCheck = (p) => <Icon d="M20 6L9 17l-5-5" {...p} />;
+const IconAlert = (p) => <Icon d="M12 9v4M12 17h.01M10.3 3.9L2.8 17a1.5 1.5 0 001.3 2.2h15.8a1.5 1.5 0 001.3-2.2L13.7 3.9a1.5 1.5 0 00-2.6 0z" {...p} />;
+
+const ESSENCES = [
+  { id: "iroko", nom: "Iroko", origine: "Afrique de l'Ouest", couleur: "#b8863b",
+    note: "Doré chaud, grain droit, référence des terrasses ivoiriennes." },
+  { id: "badi", nom: "Badi", origine: "Bassin du Congo", couleur: "#d9b878",
+    note: "Blond clair, fil régulier, aspect scandinave et lumineux." },
+  { id: "tali", nom: "Tali", origine: "Afrique centrale", couleur: "#7a3826",
+    note: "Brun-rouge profond, forte densité, allure de bois massif." },
+];
+const TYPOLOGIES = [
+  { id: "terrasse", nom: "Terrasse extérieure" },
+  { id: "bardage", nom: "Bardage de façade" },
+  { id: "parquet", nom: "Parquet intérieur" },
+  { id: "mobilier", nom: "Mobilier sur-mesure" },
+];
+
+/* ---------- Comparateur avant/après sur de vraies images ---------- */
+function CompareSlider({ beforeUrl, afterUrl, essence }) {
+  const [pos, setPos] = useState(50);
+  const dragging = useRef(false);
+  const wrapRef = useRef(null);
+
+  const updateFromClientX = useCallback((clientX) => {
+    const rect = wrapRef.current.getBoundingClientRect();
+    let pct = ((clientX - rect.left) / rect.width) * 100;
+    setPos(Math.max(0, Math.min(100, pct)));
+  }, []);
+
+  useEffect(() => {
+    const move = (e) => { if (dragging.current) updateFromClientX(e.touches ? e.touches[0].clientX : e.clientX); };
+    const up = () => { dragging.current = false; };
+    window.addEventListener('mousemove', move);
+    window.addEventListener('mouseup', up);
+    window.addEventListener('touchmove', move);
+    window.addEventListener('touchend', up);
+    return () => {
+      window.removeEventListener('mousemove', move);
+      window.removeEventListener('mouseup', up);
+      window.removeEventListener('touchmove', move);
+      window.removeEventListener('touchend', up);
+    };
+  }, [updateFromClientX]);
+
+  return (
+    <div ref={wrapRef}
+         className="relative w-full aspect-[3/2] rounded-xl overflow-hidden select-none bg-black"
+         style={{ border: '1px solid var(--line)' }}
+         onMouseDown={(e) => { dragging.current = true; updateFromClientX(e.clientX); }}
+         onTouchStart={(e) => { dragging.current = true; updateFromClientX(e.touches[0].clientX); }}>
+      <img src={afterUrl} alt="Rendu généré" className="absolute inset-0 w-full h-full object-cover" />
+      <div className="absolute inset-0" style={{ clipPath: `inset(0 ${100 - pos}% 0 0)` }}>
+        <img src={beforeUrl} alt="Photo d'origine" className="absolute inset-0 w-full h-full object-cover" />
+      </div>
+      <div className="absolute top-0 bottom-0" style={{ left: `${pos}%`, width: 2, background: 'rgba(241,236,224,0.85)' }} />
+      <div className="absolute rounded-full flex items-center justify-center"
+           style={{ left: `${pos}%`, top: '50%', width: 40, height: 40, transform: 'translate(-50%,-50%)',
+                    background: 'var(--amber)', border: '2px solid rgba(20,17,12,0.6)' }}>
+        <IconArrows size={18} color="#16140f" />
+      </div>
+      <span className="absolute left-3 top-3 text-[11px] px-2 py-1 rounded-md" style={{ background: 'rgba(20,17,12,0.55)', color: 'var(--text-dim)' }}>Avant</span>
+      <span className="absolute right-3 top-3 text-[11px] px-2 py-1 rounded-md" style={{ background: 'rgba(20,17,12,0.55)', color: 'var(--text-dim)' }}>Après — {essence.nom}</span>
+    </div>
+  );
+}
+
+function QuoteModal({ open, onClose, essence, typologie }) {
+  const [sent, setSent] = useState(false);
+  if (!open) return null;
+  return (
+    <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center p-0 sm:p-6"
+         style={{ background: 'rgba(10,9,6,0.6)', animation: 'fadeIn 0.15s ease-out' }} onClick={onClose}>
+      <div className="w-full sm:max-w-md rounded-t-2xl sm:rounded-2xl overflow-hidden"
+           style={{ background: 'var(--bg-panel)', border: '1px solid var(--line)' }} onClick={(e) => e.stopPropagation()}>
+        <div className="flex items-center justify-between px-6 py-5" style={{ borderBottom: '1px solid var(--line-soft)' }}>
+          <h3 className="serif text-xl">Demander un devis</h3>
+          <button onClick={onClose} className="p-1.5 rounded-full" style={{ color: 'var(--text-dim)' }}><IconClose size={18} /></button>
+        </div>
+        {!sent ? (
+          <div className="px-6 py-5 space-y-4">
+            <div className="rounded-lg p-4" style={{ background: 'var(--bg-panel-2)', border: '1px solid var(--line-soft)' }}>
+              <p className="text-[13px]" style={{ color: 'var(--text-faint)' }}>Résumé du projet</p>
+              <div className="mt-2 flex items-center gap-3">
+                <div className="w-9 h-9 rounded-md" style={{ background: essence.couleur, border: '1px solid rgba(0,0,0,0.3)' }} />
+                <div>
+                  <p className="text-sm">{typologie.nom}</p>
+                  <p className="text-[13px]" style={{ color: 'var(--text-dim)' }}>Essence : {essence.nom} · {essence.origine}</p>
+                </div>
+              </div>
+            </div>
+            <label className="block">
+              <span className="text-[13px]" style={{ color: 'var(--text-dim)' }}>Nom complet</span>
+              <input type="text" placeholder="Ex. Aïcha Koné" className="mt-1 w-full px-3 py-2.5 rounded-lg text-sm outline-none" style={{ background: 'var(--bg)', border: '1px solid var(--line)', color: 'var(--text)' }} />
+            </label>
+            <label className="block">
+              <span className="text-[13px]" style={{ color: 'var(--text-dim)' }}>Téléphone ou email</span>
+              <input type="text" placeholder="+225 07 00 00 00 00" className="mt-1 w-full px-3 py-2.5 rounded-lg text-sm outline-none" style={{ background: 'var(--bg)', border: '1px solid var(--line)', color: 'var(--text)' }} />
+            </label>
+            <label className="block">
+              <span className="text-[13px]" style={{ color: 'var(--text-dim)' }}>Surface estimée (m²)</span>
+              <input type="text" placeholder="Ex. 45" className="mt-1 w-full px-3 py-2.5 rounded-lg text-sm outline-none" style={{ background: 'var(--bg)', border: '1px solid var(--line)', color: 'var(--text)' }} />
+            </label>
+            <button onClick={() => setSent(true)} className="w-full py-3 rounded-lg text-sm font-medium" style={{ background: 'var(--amber)', color: '#1a1510' }}>
+              Envoyer la demande
+            </button>
+          </div>
+        ) : (
+          <div className="px-6 py-10 flex flex-col items-center text-center gap-3">
+            <div className="w-12 h-12 rounded-full flex items-center justify-center" style={{ background: 'var(--amber-soft)' }}><IconCheck size={22} color="var(--amber)" /></div>
+            <p className="serif text-lg">Demande envoyée</p>
+            <p className="text-[13px]" style={{ color: 'var(--text-dim)' }}>Un artisan Woodstauhn vous recontacte sous 24h.</p>
+            <button onClick={onClose} className="mt-2 text-sm underline" style={{ color: 'var(--text-dim)' }}>Fermer</button>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function App() {
+  const [essenceId, setEssenceId] = useState("iroko");
+  const [typologieId, setTypologieId] = useState("terrasse");
+  const [status, setStatus] = useState("idle"); // idle | ready | generating | done | error
+  const [photoFile, setPhotoFile] = useState(null);
+  const [photoUrl, setPhotoUrl] = useState(null);
+  const [renderUrl, setRenderUrl] = useState(null);
+  const [errorMsg, setErrorMsg] = useState("");
+  const [showQuote, setShowQuote] = useState(false);
+  const fileInputRef = useRef(null);
+
+  const essence = ESSENCES.find(e => e.id === essenceId);
+  const typologie = TYPOLOGIES.find(t => t.id === typologieId);
+
+  const handleFile = (file) => {
+    if (!file) return;
+    setPhotoFile(file);
+    setPhotoUrl(URL.createObjectURL(file));
+    setStatus("ready");
+  };
+
+  const startGeneration = async () => {
+    setErrorMsg("");
+
+    setStatus("generating");
+    const formData = new FormData();
+    formData.append("photo", photoFile);
+    formData.append("essenceId", essenceId);
+    formData.append("typologieId", typologieId);
+
+    try {
+      const res = await fetch(`${BACKEND_URL}/api/render`, { method: "POST", body: formData });
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        throw new Error(body.error || `Erreur serveur (${res.status})`);
+      }
+      const data = await res.json();
+      setRenderUrl(data.renderUrl);
+      setStatus("done");
+    } catch (e) {
+      setErrorMsg(e.message || "La génération a échoué. Réessayez.");
+      setStatus("error");
+    }
+  };
+
+  return (
+    <div className="min-h-screen" style={{ background: 'var(--bg)' }}>
+      <header className="px-6 sm:px-10 py-6 flex items-center justify-between" style={{ borderBottom: '1px solid var(--line-soft)' }}>
+        <div className="flex items-center gap-3">
+          <div className="w-9 h-9 rounded-lg flex items-center justify-center serif text-lg" style={{ background: 'var(--amber-soft)', color: 'var(--amber)' }}>W</div>
+          <div>
+            <p className="serif text-lg leading-none">Woodstauhn</p>
+            <p className="text-[11px] tracking-wide" style={{ color: 'var(--text-faint)' }}>AI Render Studio</p>
+          </div>
+        </div>
+        <button onClick={() => setShowQuote(true)} className="hidden sm:inline-flex px-4 py-2 rounded-lg text-sm" style={{ border: '1px solid var(--line)', color: 'var(--text-dim)' }}>
+          Demander un devis
+        </button>
+      </header>
+
+      <div className="px-6 sm:px-10 pt-10 pb-6">
+        <p className="serif text-3xl sm:text-4xl max-w-xl">Habillez votre pièce d'un bois véritable, à partir de votre propre photo.</p>
+        <p className="mt-2 text-sm max-w-lg" style={{ color: 'var(--text-dim)' }}>Déposez une photo, choisissez une essence ivoirienne, et obtenez un rendu généré par IA.</p>
+      </div>
+
+      <div className="px-6 sm:px-10 pb-16 grid grid-cols-1 lg:grid-cols-[1fr_360px] gap-6">
+        <div className="rounded-2xl p-5" style={{ background: 'var(--bg-panel)', border: '1px solid var(--line-soft)' }}>
+          {status === "idle" && (
+            <div
+              onDragOver={(e) => e.preventDefault()}
+              onDrop={(e) => { e.preventDefault(); handleFile(e.dataTransfer.files[0]); }}
+              className="aspect-[3/2] rounded-xl flex flex-col items-center justify-center gap-3 cursor-pointer"
+              style={{ border: '1.5px dashed var(--line)', background: 'var(--bg-panel-2)' }}
+              onClick={() => fileInputRef.current?.click()}
+            >
+              <input ref={fileInputRef} type="file" accept="image/*" className="hidden"
+                     onChange={(e) => handleFile(e.target.files[0])} />
+              <div className="w-12 h-12 rounded-full flex items-center justify-center" style={{ background: 'var(--amber-soft)' }}><IconUpload size={22} color="var(--amber)" /></div>
+              <p className="text-sm" style={{ color: 'var(--text-dim)' }}>Glissez une photo de votre pièce ici</p>
+              <p className="text-[12px]" style={{ color: 'var(--text-faint)' }}>ou cliquez pour en choisir une</p>
+            </div>
+          )}
+
+          {status === "ready" && (
+            <div className="space-y-4" style={{ animation: 'fadeIn 0.25s ease-out' }}>
+              <div className="aspect-[3/2] rounded-xl overflow-hidden" style={{ border: '1px solid var(--line)' }}>
+                <img src={photoUrl} alt="Photo chargée" className="w-full h-full object-cover" />
+              </div>
+              <div className="flex gap-3">
+                <button onClick={() => { setStatus("idle"); setPhotoFile(null); }} className="px-4 py-2.5 rounded-lg text-sm" style={{ border: '1px solid var(--line)', color: 'var(--text-dim)' }}>Changer de photo</button>
+                <button onClick={startGeneration} className="flex-1 py-2.5 rounded-lg text-sm font-medium flex items-center justify-center gap-2" style={{ background: 'var(--amber)', color: '#1a1510' }}>
+                  <IconSpark size={16} /> Générer le rendu {essence.nom}
+                </button>
+              </div>
+            </div>
+          )}
+
+          {status === "generating" && (
+            <div className="space-y-4" style={{ animation: 'fadeIn 0.25s ease-out' }}>
+              <div className="aspect-[3/2] rounded-xl overflow-hidden relative" style={{ border: '1px solid var(--line)' }}>
+                <img src={photoUrl} alt="Photo chargée" className="w-full h-full object-cover opacity-50" />
+                <div className="absolute inset-0 flex items-center justify-center">
+                  <div className="w-10 h-10 rounded-full" style={{ border: '3px solid rgba(241,236,224,0.2)', borderTopColor: 'var(--amber)', animation: 'spin 0.8s linear infinite' }} />
+                </div>
+              </div>
+              <div>
+                <p className="text-[12px] mb-1.5" style={{ color: 'var(--text-dim)' }}>Génération du rendu {essence.nom} en cours…</p>
+                <div className="h-1.5 rounded-full overflow-hidden" style={{ background: 'var(--line-soft)' }}>
+                  <div className="grain-progress h-full rounded-full w-full" />
+                </div>
+              </div>
+            </div>
+          )}
+
+          {status === "error" && (
+            <div className="space-y-4" style={{ animation: 'fadeIn 0.25s ease-out' }}>
+              <div className="aspect-[3/2] rounded-xl overflow-hidden relative" style={{ border: '1px solid var(--line)' }}>
+                {photoUrl && <img src={photoUrl} alt="Photo chargée" className="w-full h-full object-cover opacity-30" />}
+              </div>
+              <div className="flex items-start gap-3 p-4 rounded-lg" style={{ background: 'rgba(217,100,58,0.1)', border: '1px solid rgba(217,100,58,0.3)' }}>
+                <IconAlert size={18} color="var(--danger)" />
+                <p className="text-[13px]" style={{ color: 'var(--text-dim)' }}>{errorMsg}</p>
+              </div>
+              <button onClick={() => setStatus(photoFile ? "ready" : "idle")} className="px-4 py-2.5 rounded-lg text-sm" style={{ border: '1px solid var(--line)', color: 'var(--text-dim)' }}>
+                Réessayer
+              </button>
+            </div>
+          )}
+
+          {status === "done" && (
+            <div style={{ animation: 'fadeIn 0.3s ease-out' }}>
+              <CompareSlider beforeUrl={photoUrl} afterUrl={renderUrl} essence={essence} />
+              <div className="flex flex-wrap gap-3 mt-4">
+                <button onClick={() => setStatus("ready")} className="px-4 py-2.5 rounded-lg text-sm" style={{ border: '1px solid var(--line)', color: 'var(--text-dim)' }}>Recommencer</button>
+                <button onClick={() => setShowQuote(true)} className="px-4 py-2.5 rounded-lg text-sm font-medium" style={{ background: 'var(--amber)', color: '#1a1510' }}>Demander un devis pour ce rendu</button>
+              </div>
+            </div>
+          )}
+        </div>
+
+        <div className="space-y-5">
+          <div className="rounded-2xl p-5" style={{ background: 'var(--bg-panel)', border: '1px solid var(--line-soft)' }}>
+            <div className="flex items-center gap-2 mb-4" style={{ color: 'var(--text-dim)' }}><IconLayers size={16} /><p className="text-sm">Essence de bois</p></div>
+            <div className="space-y-2">
+              {ESSENCES.map(e => (
+                <button key={e.id} onClick={() => setEssenceId(e.id)} className="w-full flex items-center gap-3 p-3 rounded-xl text-left"
+                        style={{ background: essenceId === e.id ? 'var(--amber-soft)' : 'var(--bg-panel-2)', border: essenceId === e.id ? '1px solid var(--amber)' : '1px solid var(--line-soft)' }}>
+                  <div className="w-8 h-8 rounded-lg shrink-0" style={{ background: e.couleur, border: '1px solid rgba(0,0,0,0.3)' }} />
+                  <div className="min-w-0">
+                    <p className="text-sm">{e.nom}</p>
+                    <p className="text-[12px] truncate" style={{ color: 'var(--text-faint)' }}>{e.origine}</p>
+                  </div>
+                  {essenceId === e.id && <IconCheck size={16} color="var(--amber)" style={{ marginLeft: 'auto' }} />}
+                </button>
+              ))}
+            </div>
+            <p className="text-[12px] mt-3" style={{ color: 'var(--text-faint)' }}>{essence.note}</p>
+          </div>
+
+          <div className="rounded-2xl p-5" style={{ background: 'var(--bg-panel)', border: '1px solid var(--line-soft)' }}>
+            <div className="flex items-center gap-2 mb-4" style={{ color: 'var(--text-dim)' }}><IconSofa size={16} /><p className="text-sm">Typologie du projet</p></div>
+            <div className="grid grid-cols-2 gap-2">
+              {TYPOLOGIES.map(t => (
+                <button key={t.id} onClick={() => setTypologieId(t.id)} className="px-3 py-2.5 rounded-lg text-[13px] text-left"
+                        style={{ background: typologieId === t.id ? 'var(--amber-soft)' : 'var(--bg-panel-2)', border: typologieId === t.id ? '1px solid var(--amber)' : '1px solid var(--line-soft)', color: typologieId === t.id ? 'var(--text)' : 'var(--text-dim)' }}>
+                  {t.nom}
+                </button>
+              ))}
+            </div>
+          </div>
+
+        </div>
+      </div>
+
+      <QuoteModal open={showQuote} onClose={() => setShowQuote(false)} essence={essence} typologie={typologie} />
+    </div>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+</script>
+</body>
+</html>
